@@ -1,243 +1,123 @@
-[![Fork Button](https://img.shields.io/github/forks/iemafzalhassan/full-stack_chatApp?style=social)](https://github.com/iemafzalhassan/full-stack_chatApp/fork)
+# Real-Time Chat App on Kubernetes
 
+Deploying a full-stack real-time chat application (React, Node.js, Socket.io, MongoDB) to Kubernetes, and debugging the production-style failures that came up along the way.
 
-# Real-Time Chat Application
+> **Credit:** the application code (frontend, backend, Dockerfiles) comes from [iemafzalhassan/full-stack_chatApp](https://github.com/iemafzalhassan/full-stack_chatApp), under the MIT License. The Kubernetes deployment, troubleshooting and documentation in [`k8s/`](k8s/) are my work.
 
+## What I built
 
-Welcome to the **Full Stack Realtime Chat App** project, where we're building a scalable and secure real-time chat experience using the latest technologies. Whether you're a seasoned developer or a beginner, we invite you to contribute and be a part of this exciting journey!
+- **Kubernetes manifests** for the whole stack in a dedicated `chat-app` namespace: Deployments, Services, a PersistentVolumeClaim for MongoDB data, and a Secret for the JWT signing key
+- **Container images** pushed to Docker Hub (`fahadfx/chatapp-frontend`, `fahadfx/chatapp-backend`) so any cluster can pull them
+- **Five real deployment failures diagnosed and fixed**, each written up with symptoms, the commands used to find the cause, the fix and the lesson: [k8s/CHALLENGES.md](k8s/CHALLENGES.md)
+- **A root-cause analysis** of a MongoDB CrashLoopBackOff traced to a MongoDB / Linux kernel incompatibility: [k8s/RCA-mongodb-pod-failure.md](k8s/RCA-mongodb-pod-failure.md)
 
-## Table of Contents
+## Architecture
 
-
-* [Introduction](#introduction)
-* [Features](#features)
-* [Tech Stack](#tech-stack)
-* [Getting Started](#getting-started)
-* [Building the Backend](#building-the-backend)
-* [Running the Application](#running-the-application)
-* [Contributing](#contributing)
-* [Future Plans](#future-plans)
-* [License](#license)
-
-## 📝 Introduction
-
-This project aims to provide a real-time chat experience that's both scalable and secure. With a focus on modern technologies, we're building an application that's easy to use and maintain.
-
-## ✨ Features
-
-
-* **Real-time Messaging**: Send and receive messages instantly using Socket.io 
-* **User Authentication & Authorization**: Securely manage user access with JWT 
-* **Scalable & Secure Architecture**: Built to handle large volumes of traffic and data 
-* **Modern UI Design**: A user-friendly interface crafted with React and TailwindCSS 
-* **Profile Management**: Users can upload and update their profile pictures 
-* **Online Status**: View real-time online/offline status of users 
-
-
-## 🛠️ Tech Stack
-
-
-* **Backend:** Node.js, Express, MongoDB, Socket.io
-* **Frontend:** React, TailwindCSS
-* **Containerization:** Docker
-* **Orchestration:** Kubernetes (planned)
-* **Web Server:** Nginx
-* **State Management:** Zustand
-* **Authentication:** JWT
-* **Styling Components:** DaisyUI
-
-
-### 🔧 Prerequisites
-
-
-* **[Node.js](https://nodejs.org/)** (v14 or higher)
-* **[Docker](https://www.docker.com/get-started)** (for containerizing the app)
-* **[Git](https://git-scm.com/downloads)** (to clone the repository)
-
-
-### 📝 Environment Configuration
-
-Create a `.env` file in the root directory with the following configuration:
-
-```env
-# Database Configuration
-MONGODB_URI=mongodb://root:admin@mongo:27017/chatApp?authSource=admin&retryWrites=true&w=majority
-
-# JWT Configuration
-JWT_SECRET=your_jwt_secret_key
-
-# Server Configuration
-PORT=5001
-NODE_ENV=production
+```
+                         ┌──────────────── namespace: chat-app ─────────────────┐
+                         │                                                      │
+ Browser ── port-forward ┼─► frontend Service ──► frontend Pods ×3 (nginx)      │
+   localhost:8080        │      ClusterIP :80          │                        │
+                         │                             ├─ /            static React build
+                         │                             ├─ /api/        ─┐       │
+                         │                             └─ /socket.io/  ─┤       │
+                         │                                              ▼       │
+                         │                      backend Service ──► backend Pods ×3 (Node.js)
+                         │                        ClusterIP :5001         │     │
+                         │                                                │  JWT_SECRET from Secret
+                         │                                                ▼     │
+                         │                      mongodb Service ──► MongoDB Pod ×1 (mongo:7.0)
+                         │                        ClusterIP :27017        │     │
+                         │                                                ▼     │
+                         │                                         PVC  mongodb-pvc (5Gi)
+                         └──────────────────────────────────────────────────────┘
 ```
 
-> **Note:** 
-> - Replace `your_jwt_secret_key` with a strong secret key
-> - For local development without Docker, change `MONGODB_URI` to `mongodb://localhost:27017/chatApp`
-> - You can use command ```echo "Text what you want" | base64
+Only the frontend is exposed. Its nginx config passes `/api/` and `/socket.io/` to the `backend` Service, so the backend and database are never reachable from outside the cluster.
 
-### Clone the Repository
+| Component | Image | Replicas | Port | Kubernetes objects |
+|---|---|---|---|---|
+| Frontend | `fahadfx/chatapp-frontend:latest` | 3 | 80 | Deployment, Service |
+| Backend | `fahadfx/chatapp-backend:latest` | 3 | 5001 | Deployment, Service, Secret |
+| Database | `mongo:7.0` | 1 | 27017 | Deployment, Service, PVC |
+
+## Deploy it
+
+**Requirements:** a Kubernetes cluster (I used minikube; kubeadm, EKS, GKE or AKS work the same way) and `kubectl`.
 
 ```bash
-git clone https://github.com/iemafzalhassan/full-stack_chatApp.git
+git clone https://github.com/fahadfx/full-stack_chatApp.git
+cd full-stack_chatApp/k8s
+
+kubectl apply -f namespace.yml          # create the namespace first
+kubectl apply -f secrets.yml
+kubectl apply -f mongodb-pvc.yml
+kubectl apply -f mongodb-deployement.yml -f mongodb-service.yml
+kubectl apply -f backend-deployement.yml -f backend-service.yml
+kubectl apply -f frontend-deployement.yml -f frontend-service.yml
+
+kubectl get pods -n chat-app -w         # wait until all 7 pods are 1/1 Running
 ```
 
-🏗️ Build and Run the Application
-
-Follow these steps to build and run the application:
-
-1. Build & Run the Containers:
+Open the app:
 
 ```bash
-cd full-stack_chatApp
-```
-```bash
-docker-compose up -d --build
+kubectl port-forward -n chat-app svc/frontend 8080:80
 ```
 
-2. Access the application in your browser:
+Then go to **http://localhost:8080**. Use port 8080, because the backend's CORS allowlist only accepts `http://localhost:8080` and `http://localhost`.
 
-```
-http://localhost
-```
----
-
-## 🛠️ Getting Started
-
-Follow these simple steps to get the project up and running on your local Host using docker.
+Check that it works:
 
 ```bash
-git clone https://github.com/iemafzalhassan/full-stack_chatApp.git
+kubectl logs -n chat-app deploy/backend-deployment    # expect "MongoDB connected: mongodb"
 ```
 
-```bash
-cd full-stack_chatApp
-```
-## Create a Docker network:
+## Challenges solved
 
-```bash
-docker network create full-stack
-```
+| # | Problem | Root cause | Fix |
+|---|---|---|---|
+| 1 | MongoDB pod in `CrashLoopBackOff` | `mongo:latest` resolved to MongoDB 9, which refuses to start on Linux kernel 6.19+ | Pinned `mongo:7.0` ([RCA](k8s/RCA-mongodb-pod-failure.md)) |
+| 2 | Backend couldn't connect to MongoDB | No Service named `mongodb`, so the hostname didn't resolve | Added a ClusterIP Service |
+| 3 | Frontend pods in `ImagePullBackOff` | Image was built locally but never pushed to Docker Hub | `docker push` to the registry |
+| 4 | No way to open the app | All Services are ClusterIP (internal only) | `kubectl port-forward` to the frontend Service |
+| 5 | Signup returned HTTP 500 | Env var named `JWT_SECRETS`, but the code reads `JWT_SECRET` | Renamed the variable, found with `kubectl logs` and `printenv` |
 
-## 🛠️ Building the Frontend
+Full write-ups, with commands and output: **[k8s/CHALLENGES.md](k8s/CHALLENGES.md)**
 
-```bash
-cd frontend
-```
+## What I learned
 
-```bash
-docker build -t full-stack_frontend .
-```
+- **Pin image tags.** `latest` changed underneath me and broke a working database.
+- **Pod status tells you where to look.** `ImagePullBackOff` means a registry problem, `CrashLoopBackOff` means read the app logs, and `Pending` means scheduling or storage.
+- **Pods talk through Services, not IPs.** A Service's name is the DNS hostname, and its selector must match the pod labels.
+- **Kubernetes doesn't check your config against your app.** A misspelled env var deploys fine and fails at runtime. `kubectl exec -- printenv` shows what the container really sees.
+- **Kubernetes is declarative.** `kubectl apply` stores the desired state, and controllers keep reconciling the cluster towards it. That's why deleting a pod just gets it recreated.
 
-### Run the Frontend container:
+## Next steps
 
-```bash
-docker run -d --network=full-stack  -p 5173:5173 --name frontend full-stack_frontend:latest
-```
-#### The frontend will now be accessible on port 5173.
+- [ ] Move the MongoDB credentials out of the Deployment YAML and into a Secret
+- [ ] Pin versioned image tags instead of `:latest`
+- [ ] Add readiness and liveness probes (the backend has a `/health` route) and resource requests/limits
+- [ ] Replace port-forward with an Ingress controller
+- [ ] Deploy to a managed cluster (EKS) and add a CI/CD pipeline that builds, pushes and deploys the images
+- [ ] Configure Cloudinary credentials so profile picture upload works
 
+## Tech stack
 
-## Run the MongoDB Container:
+- **Orchestration:** Kubernetes (minikube), kubectl
+- **Containers:** Docker, Docker Hub, containerd
+- **Application:** React, Vite, TailwindCSS, Zustand, Node.js, Express, Socket.io, JWT
+- **Database:** MongoDB 7.0
+- **Web server / proxy:** nginx
 
-```bash
-docker run -d -p 27017:27017 --name mongo mongo:latest
-```
----
+## Screenshots
 
-## 🛠️ Building the Backend
+![Chat](frontend/public/chat.png)
 
-```bash
-cd backend
-```
-
-### Build the Backend image:
-
-```bash
-docker build -t full-stack_backend .
-```
-
-### Run the Backend container:
-
-```bash
-docker run -d --network=full-stack --add-host=host.docker.internal:host-gateway -p 5001:5001 --env-file .env full-stack_backend
-```
-#### This will build and run the backend container, exposing the backendAPI on port 5001.
-
-`Backend API: http://localhost:5001`
-
-### To Verify the conncetion between backend and databse:
-```bash
-docker-compose logs -f
-```
-
-### Once the backend and frontend containers are running, you can access the application in your browser:
-
-`Frontend: http://localhost`
-
-
-You can now interact with the real-time chat app and start messaging!
-
----
-
-
-
-### 🤝 Contributing
-
-
-We welcome contributions from DevOps & Developer of all skill levels! Here's how you can contribute:
-
-**Report bugs:** If you encounter any bugs or issues, please open an issue with detailed information.
-**Suggest features:** Have an idea for a new feature? Open an issue to discuss it with the community.
-**Submit pull requests:** If you have a fix or a feature you'd like to contribute, submit a pull request. Ensure your changes pass any linting or tests, if applicable.
-
-### 🌐 Join the Community
-
-We invite you to join our community of developers and contributors. Let's work together to build an amazing real-time chat application!
-
-* **Star this repository** to show your support
-* **Fork this repository** to contribute to the project
-* **Open an issue** to report bugs or suggest features
-* **Submit a pull request** to contribute code changes
-
-## 🔮 Future Plans
-
-
-This project is evolving, and here are a few exciting things on the horizon:
-
-* [ ] **CI/CD Pipelines:** Implement Continuous Integration and Continuous Deployment pipelines to automate testing and deployment.
-* [ ] **Kubernetes (K8s):** Add Kubernetes manifests for container orchestration to deploy the app on cloud platforms like AWS, GCP, or Azure.
-* [ ] **Feature Expansion:** Add more features like group chats, media sharing, and user status updates.
-* **Stay tuned for updates as we continue to improve and expand this project!**
-
----
-
-## 📚 Project Snapshots:
+![Login](frontend/public/login.png)
 
 ![Settings](frontend/public/settings.png)
 
-![chat](frontend/public/chat.png)
+## License
 
-![logout](/frontend/public/logout.png)
-
-![Login](/frontend/public/login.png)
-
-
-
-## 📜 License
-
-
-This project is licensed under the MIT License. See the LICENSE file for more details.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+MIT, see [LICENSE](LICENSE). The original application code is © its authors. See the credit at the top of this file.
